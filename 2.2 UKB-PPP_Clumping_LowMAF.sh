@@ -12,7 +12,7 @@ protein=$(cat Protein_Olink_Directory_Size28.txt | awk '{print $1}' | head -"$i"
   if [ "$n_sig_all" -gt 0 ]
     then
       plink \
-        --bfile $path_reference/$chr \                              ## UKB **   files
+        --bfile $chr \                              ## 5000 randomly selected individuals of European ancestry in UKB
         --maf 0.001 \
         --keep ukb.eurFIDIIDPCA.txt \                              ## list of individuals of European ancestry
         --remove w27449_remove.txt \                              ## list of individuals whose informed consent was withdrawn
