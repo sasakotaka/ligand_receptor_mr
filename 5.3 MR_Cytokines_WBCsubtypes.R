@@ -1,0 +1,134 @@
+
+## Load libraries
+
+library('vroom')
+library('dplyr')
+library('tidyverse')
+library('glue')
+library('TwoSampleMR')
+
+
+## Load data
+
+file <- 'Proteins_cis_Associations.txt'
+mr_association <- vroom(file, col_names = TRUE)
+
+file <- 'Protein_Olink_Directory_Size_Chr28.txt'
+protein_list28 <- vroom(file, col_name = TRUE)
+
+file <- 'outco_dat_neutrophil_formatted.txt'
+outco_neutro <- vroom(file, col_names = TRUE)
+
+file <- 'outco_dat_monocyte_formatted.txt'
+outco_mono <- vroom(file, col_names = TRUE)
+
+file <- 'outco_dat_lymphocyte_formatted.txt'
+outco_lymph <- vroom(file, col_names = TRUE)
+
+wbc_list <- c("neutro", "mono", "lymph")
+wbc_N <- c(519288, 521594, 524923)
+
+
+## Perform MR
+
+for (k in 1) {
+  i <- mr_association$i[k]
+  j <- mr_association$j[k]
+  
+  wbc = wbc_list[i]
+  protein = protein_list28$Protein[j]
+  protein_chr = protein_list28$Chr[j]
+  protein_tss = protein_list28$TSS[j]
+  
+  command1 <- paste0("outco <- outco_", wbc, "
+                    file <- '", protein, "_ppp_signif_extract.txt'", sep = "")
+  eval(parse(text = command1))
+  
+  ligand_pqtl <- vroom(file, col_names = TRUE)
+  ligand_pqtl <- ligand_pqtl %>%
+    mutate(
+      chr_genpos = glue("{CHROM}_{GENPOS}"),
+    )
+  ligand_pqtl <- ligand_pqtl %>%
+    mutate(MHC = case_when(
+      ligand_pqtl$CHROM == 6 & ligand_pqtl$GENPOS > 28010120 & ligand_pqtl$GENPOS < 33980577 ~ "YES",
+      TRUE ~ "NO"))
+  ligand_pqtl <- ligand_pqtl %>%
+    mutate(CIS_TRANS = case_when(
+      ligand_pqtl$CHROM == protein_chr & ligand_pqtl$GENPOS > protein_tss - 1000000 & ligand_pqtl$GENPOS < protein_tss + 1000000 ~ "cis",
+      TRUE ~ "trans"))
+  all <- filter(ligand_pqtl, MHC == "NO")
+  cis <- filter(all, CIS_TRANS == "cis")
+  trans <- filter(all, CIS_TRANS == "trans")
+  receptor <- filter(trans, REC == "rec")  
+  
+  ## MR using all pQTLs
+  expo_dat_all <- format_data(all, type = "exposure", snp_col = "chr_genpos", beta_col = "BETA", se_col = "SE",
+                            eaf_col = "EAF", effect_allele_col = "effect_allele", other_allele_col = "other_allele", 
+                            pval_col = "log10P", chr_col = "chr", pos_col = "pos", log_pval = TRUE)
+  dat_all <- harmonise_data(exposure_dat = expo_dat_all, outcome_dat = outco, action = 1)
+  dat_all$samplesize.exposure <- protein_list28$N[j]
+  dat_all$samplesize.outcome <- wbc_N[i]
+  dat_all <- steiger_filtering(dat_all)
+  dat_all$Rsq <- (dat_all$beta.exposure / dat_all$se.exposure) ^2 / ((dat_all$beta.exposure / dat_all$se.exposure) ^2 + dat_all$samplesize.exposure - 2)
+  dat_all$F_stat <- dat_all$Rsq * (dat_all$samplesize.exposure - 2)/(1 - dat_all$Rsq)
+  command2 <- paste0("write.table('mr_data_", wbc, "_", protein, ".txt', dat_all, sep = \"\t\", quote = FALSE, col.names = TRUE, row.names = FALSE)", sep = "")
+  eval(parse(text = command2))
+    
+  res_mr_all <- mr(dat_all, method_list=c("mr_ivw", "mr_wald_ratio", "mr_egger_regression", "mr_weighted_median"))
+  res_mr_all_odds <- generate_odds_ratios(res_mr_all)
+  if (nrow(filter(dat_all, remove == "FALSE"))  > 2) {
+    het <- mr_heterogeneity(dat_all, method_list = c("mr_ivw", "mr_egger_regression", "mr_weighted_median"))
+  }
+  if (nrow(filter(dat_all, remove == "FALSE"))  == 2) {
+    het <- mr_heterogeneity(dat_all, method_list = c("mr_ivw", "mr_egger_regression"))
+  }
+  het$Isq <- (het$Q - het$Q_df) * 100 / het$Q
+  res_mr_all_odds_het <- left_join(res_mr_all_odds, het, by = 'method')
+  plt <- mr_pleiotropy_test(dat_all) 
+  res_mr_all_odds_het_plt <- left_join(res_mr_all_odds_het, plt, by = 'method')
+  command3 <- paste0("write.table('mr_results_", wbc, "_", protein, "_all.txt', res_mr_all_odds_het_plt, sep = \"\t\", quote = FALSE, col.names = TRUE, row.names = FALSE)", sep = "")
+  eval(parse(text = command3))
+
+  ## MR using all pQTLs after Steiger filtering
+  if (nrow(filter(dat_all, steiger_dir == "FALSE")) > 0) {
+    dat_all_steiger <- filter(dat_all, steiger_dir == "TRUE")
+    res_mr_all_steiger <- mr(dat_all_steiger, method_list=c("mr_ivw", "mr_wald_ratio", "mr_egger_regression", "mr_weighted_median"))
+    res_mr_all_steiger_odds <- generate_odds_ratios(res_mr_all_steiger)
+    if (nrow(filter(dat_all_steiger, remove == "FALSE"))  > 2) {
+      het <- mr_heterogeneity(dat_all_steiger, method_list = c("mr_ivw", "mr_egger_regression", "mr_weighted_median"))
+    }
+    if (nrow(filter(dat_all_steiger, remove == "FALSE"))  == 2) {
+      het <- mr_heterogeneity(dat_all_steiger, method_list = c("mr_ivw", "mr_egger_regression"))
+    }
+    res_mr_all_steiger_odds_het <- left_join(res_mr_all_steiger_odds, het, by = 'method')
+    command4 <- paste0("write.table('mr_results_", wbc, "_", protein, "_all_steiger.txt', res_mr_all_steiger_odds_het_plt, sep = \"\t\", quote = FALSE, col.names = TRUE, row.names = FALSE)", sep = "")
+    eval(parse(text = command4))
+  }
+ 
+  ## MR using cis-pQTLs
+  expo_dat_cis <- format_data(cis, type = "exposure", snp_col = "chr_genpos", beta_col = "BETA", se_col = "SE",
+                              eaf_col = "EAF", effect_allele_col = "effect_allele", other_allele_col = "other_allele", 
+                              pval_col = "log10P", chr_col = "chr", pos_col = "pos", log_pval = TRUE)
+  dat_cis <- harmonise_data(exposure_dat = expo_dat_cis, outcome_dat = outco, action = 1)
+  res_mr_cis <- mr(dat_cis, method_list=c("mr_ivw", "mr_wald_ratio", "mr_egger_regression", "mr_weighted_median"))
+  res_mr_cis_odds <- generate_odds_ratios(res_mr_cis)
+  command5 <- paste0("write.table('mr_results_", wbc, "_", protein, "_cis.txt', res_mr_cis_odds, sep = \"\t\", quote = FALSE, col.names = TRUE, row.names = FALSE)", sep = "")
+  eval(parse(text = command5))
+  
+  ## MR using receptor QTLs
+  expo_dat_recpetor <- format_data(recpetor, type = "exposure", snp_col = "chr_genpos", beta_col = "BETA", se_col = "SE",
+                                   eaf_col = "EAF", effect_allele_col = "effect_allele", other_allele_col = "other_allele", 
+                                   pval_col = "log10P", chr_col = "chr", pos_col = "pos", log_pval = TRUE)
+  dat_recpetor <- harmonise_data(exposure_dat = expo_dat_recpetor, outcome_dat = outco, action = 1)
+  res_mr_receptor_each_sum <- NULL
+  for (l in 1:nrow(dat_receptor)) {
+    command4 <- paste0("dat_receptor_each <- dat_receptor[", l, ",]", sep = "")
+    eval(parse(text = command4))
+    res_mr_receptor_each <- mr(dat_receptor_each, method_list=c("mr_wald_ratio"))
+    res_mr_receptor_each_sum <- rbind(res_mr_receptor_each_sum, res_mr_receptor_each)
+  }
+  res_mr_receptor_each_odds <- generate_odds_ratios(res_mr_receptor_each_sum)
+  command6 <- paste0("write.table('mr_results_", wbc, "_", protein, "_each.txt', res_mr_receptor_each_odds, sep = \"\t\", quote = FALSE, col.names = TRUE, row.names = FALSE)", sep = "")
+  eval(parse(text = command6))
+}
