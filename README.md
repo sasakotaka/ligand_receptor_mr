@@ -1,4 +1,4 @@
-This is the accompanying repository for publication titled "The Receptor Trap in Proteogenomic MR: How Receptor-Ligand Feedback Loops Can Give Incorrect and Opposite Directions of Effect."
+This is the accompanying repository for publication titled "Receptor Trap in Proteogenomic Mendelian Randomization: How Receptor-Ligand Feedback Loops Give Opposite Directions of Effect."
 Data used in the analysis will only be made available to approved researchers. 
 The code in this repository is to illustrate the analytical steps and parameters.
 
